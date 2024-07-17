@@ -1,0 +1,91 @@
+
+
+// Adjusting Landsat8 values using coeficients from Chastain et al., 2019
+// doi: https://doi.org/10.1016/j.rse.2018.11.012
+exports.adjusted = function(image) {
+  var bandIn = ['B2','B3','B4','B5','B6','B7'];
+  var interceptsL8 = [-0.0107,0.0026,-0.0015,0.0033,0.0065,0.0046];
+  var slopesL8 = [1.0946,1.0043,1.0524,0.8954,1.0049,1.0002];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL8).add(interceptsL8)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+
+exports.adjustedS2A = function(image) {
+  var bandIn = ['B2','B3','B4','B5','B6','B7'];
+  var interceptsL8 = [-0.004,-0.0009,0.0009,-0.0001,-0.0011,-0.0012];
+  var slopesL8 = [0.9778,1.0053,0.9765,0.9983,0.9987,1.003];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL8).add(interceptsL8)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+exports.adjustedS2B = function(image) {
+  var bandIn = ['B2','B3','B4','B5','B6','B7'];
+  var interceptsL8 = [-0.004,-0.0008,0.001,0,-0.0003,0.0004];
+  var slopesL8 = [0.9778,1.0075,0.9761,0.9966,1,0.9867];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL8).add(interceptsL8)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+
+// Trying to adjust Landsat 7 based on another paper (Australia)
+// Flood, N. Comparing Sentinel-2A and Landsat 7 and 8 Using Surface 
+// Reflectance over Australia. Remote Sens. 2017, 9, 659. 
+// https://doi.org/10.3390/rs9070659
+exports.adjustedL7 = function(image) {
+  var bandIn = ['B1','B2','B3','B4','B5','B7'];
+  var interceptsL7 = [-0.0022,0.0031,0.0064,0.012,0.0079,-0.0042];
+  var slopesL7 = [0.9551,1.0582,0.9871,1.0187,0.9528,0.9688];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL7).add(interceptsL7)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+
+// Adjusting using Kenyan coefficients
+exports.adjustedL7_Kenya = function(image) {
+  var bandIn = ['B1','B2','B3','B4','B5','B7'];
+  var interceptsL7 = [0.0543,0.0429,0.031,0.1076,0.0435,0.0165];
+  var slopesL7 = [0.3825,0.4383,0.4699,0.5487,0.8014,0.8597];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL7).add(interceptsL7)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+exports.adjustedL8_Kenya = function(image) {
+  var bandIn = ['B2','B3','B4','B5','B6','B7'];
+  var interceptsL8 = [0.0116,0.0165,0.0149,0.0049,-0.0027,0.0036];
+  var slopesL8 = [0.4344,0.5657,0.5762,0.8969,0.9329,0.8761];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL8).add(interceptsL8)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+
+exports.adjustedL9 = function(image) {
+  var bandIn = ['SR_B2','SR_B3','SR_B4','SR_B5'];
+  var interceptsL8 = [0.136414,0.139454,0.120147,0.122467];
+  var slopesL8 = [0.639903557,0.773585714,0.9654869,0.780133671];
+  
+  var landsatprior = image.select(bandIn);
+  var landsatadjust = landsatprior.multiply(slopesL8).add(interceptsL8)
+                                  .float().copyProperties(landsatprior)
+                                  .set('system:time_start',landsatprior.get('system:time_start'));
+  return landsatadjust;
+};
+//Used before: landsatprior.subtract(interceptsL8).divide(slopesL8)
