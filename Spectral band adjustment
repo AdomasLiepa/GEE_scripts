@@ -1,5 +1,4 @@
 
-
 // Adjusting Landsat8 values using coeficients from Chastain et al., 2019
 // doi: https://doi.org/10.1016/j.rse.2018.11.012
 exports.adjusted = function(image) {
