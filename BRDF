@@ -100,7 +100,7 @@ function getsunAngles(date, footprint){
   return [sunAz, sunZen];
 }
 /* Get azimuth.
-*
+
 * 
 * footprint: geometry of the image
 */
