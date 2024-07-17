@@ -1,0 +1,529 @@
+var siac = require('users/marcyinfeng/utils:SIAC');
+var dt = require('users/fitoprincipe/geetools:decision_tree');
+var index = require('users/adomasliepa/require_functions:indeces');
+var BRDF = require('users/adomasliepa/require_functions:BRDF');
+var adj = require('users/adomasliepa/require_functions:band_adjustment');
+
+
+var roi = ee.Geometry.Point([34.508,-0.535]);
+var time = ee.DateRange('2023-02-01','2023-09-01');
+
+
+function maskClouds(img) {
+  var clouds = ee.Image(img.get('cloud_mask')).select('probability');
+  var isNotCloud = clouds.lt(25);
+  return img.updateMask(isNotCloud);
+}
+
+var collection_ori = ee.ImageCollection('COPERNICUS/S2')
+                  .filterDate(time)
+                  .filterBounds(roi);
+
+var S2_boa = collection_ori.map(siac.get_sur);  
+
+var s2Clouds = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY')
+                  .filterDate(time)
+                  .filterBounds(roi);
+
+
+var probs = ee.Join.saveFirst('cloud_mask').apply({
+  primary: S2_boa,
+  secondary: s2Clouds,
+  condition:
+      ee.Filter.equals({leftField: 'system:index', rightField: 'system:index'})
+});
+
+
+var moremask = ee.ImageCollection(probs).map(maskClouds);
+
+
+// The dependent variable we are modeling.
+var dependent = 'NDVI';
+
+// The number of cycles per year to model.
+var harmonics = 2;
+
+// Make a list of harmonic frequencies to model.
+// These also serve as band name suffixes.
+var harmonicFrequencies = ee.List.sequence(1, harmonics);
+
+// Function to get a sequence of band names for harmonic terms.
+var constructBandNames = function(base, list) {
+  return ee.List(list).map(function(i) {
+    return ee.String(base).cat(ee.Number(i).int());
+  });
+};
+
+// Construct lists of names for the harmonic terms.
+var cosNames = constructBandNames('cos_', harmonicFrequencies);
+var sinNames = constructBandNames('sin_', harmonicFrequencies);
+
+// Independent variables.
+var independents = ee.List(['constant', 't'])
+  .cat(cosNames).cat(sinNames);
+
+// Function to add a time band.
+var addDependents = function(image) {
+  // Compute time in fractional years since the epoch.
+  var years = image.date().difference('1970-01-01', 'year');
+  var timeRadians = ee.Image(years.multiply(2 * Math.PI)).rename('t');
+  var constant = ee.Image(1);
+  return image.addBands(constant).addBands(timeRadians.float());
+};
+// Function to compute the specified number of harmonics
+// and add them as bands.  Assumes the time band is present.
+var addHarmonics = function(freqs) {
+  return function(image) {
+    // Make an image of frequencies.
+    var frequencies = ee.Image.constant(freqs);
+    // This band should represent time in radians.
+    var time = ee.Image(image).select('t');
+    // Get the cosine terms.
+    var cosines = time.multiply(frequencies).cos().rename(cosNames);
+    // Get the sin terms.
+    var sines = time.multiply(frequencies).sin().rename(sinNames);
+    return image.addBands(cosines).addBands(sines);
+  };
+};
+
+var collectionS2 = ee.ImageCollection(moremask)
+//                .filter(ee.Filter.eq('MGRS_TILE','36NXF')) // North of Kenya
+//                .filter(ee.Filter.eq('MGRS_TILE','36MXE')) // Middle of Kenya
+//                .filter(ee.Filter.eq('MGRS_TILE','36MXD')) // South of Kenya
+                .map(index.NDVIS2);
+
+print(collectionS2);
+
+//////////////////////////
+//Landsat
+/////////////////////////
+function maskL8sr(image) {
+  // Bits 3 and 5 are cloud shadow and cloud, respectively.
+  var cloudShadowBitMask = (1 << 3);
+  var cloudsBitMask = (1 << 5);
+  // Get the pixel QA band.
+  var qa = image.select('QA_PIXEL');
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  return image.updateMask(mask);
+}
+var cloudMaskL7 = function(image) {
+  var qa = image.select('QA_PIXEL');
+  // If the cloud bit (5) is set and the cloud confidence (7) is high
+  // or the cloud shadow bit is set (3), then it's a bad pixel.
+  var cloud = qa.bitwiseAnd(1 << 5)
+                  .and(qa.bitwiseAnd(1 << 7))
+                  .or(qa.bitwiseAnd(1 << 3));
+  // Remove edge pixels that don't occur in all bands
+  var mask2 = image.mask().reduce(ee.Reducer.min());
+  return image.updateMask(cloud.not()).updateMask(mask2);
+};
+
+
+/////////////////////////////////////////////////
+////////////// BRDF correction //////////////////
+/////////////////////////////////////////////////
+function renameBandsL8(image) {
+    var bands = ['SR_B2','SR_B3','SR_B4','SR_B5','SR_B6','SR_B7'];
+    var new_bands = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
+    return image.select(bands).rename(new_bands);
+}
+
+function renameBandsL7(image) {
+    var bands = ['SR_B1','SR_B2','SR_B3','SR_B4','SR_B5','SR_B7'];
+    var new_bands = ['B1','B2', 'B3', 'B4', 'B5', 'B7'];
+    return image.select(bands).rename(new_bands);
+}
+
+var s2_brdf = moremask.map(BRDF.applyBRDF_s2)
+                      .map(index.NDVIS2);
+
+var l8_brdf = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                  .filterBounds(roi)
+                  .map(maskL8sr)
+                  .filterDate(time)
+//                  .select(inBandsL8)
+                  .map(renameBandsL8)
+                  .map(BRDF.applyBRDF_l8);
+//                  .map(addNDVI8);
+//                  .map(adjustedS2B);
+//print(l8_brdf,'l8_brdf');
+
+
+var l7 = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2")
+                  .filterDate(time)
+                  .filterBounds(roi)
+                  //.map(cloudMaskL7)
+                  .map(renameBandsL7)
+//                  .map(adjustedL7)
+                  .map(BRDF.applyBRDF_l7);
+//                  .map(addNDVI7);
+//print(l7,'l7');
+var L7_boa = ee.ImageCollection('LANDSAT/LE07/C02/T1_TOA')
+                  .filterDate(time)
+                  .filterBounds(roi)
+                  .map(siac.get_l7_sur);
+                  //.map(cloudMaskL7)
+                  //.map(applyBRDF_l7); 
+//print(L7_boa,'L7_boa');
+var L8_boa = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+                  .filterBounds(roi)
+                  .filterDate(time)
+                  .map(siac.get_l8_sur);
+                  //.map(maskL8sr)
+                  //.map(applyBRDF_l8);
+//print(L8_boa, 'L8_boa');
+var pixelqa_l7 = ee.ImageCollection("LANDSAT/LE07/C02/T1_L2")
+                  .filterDate(time)
+                  .filterBounds(roi)
+                  .select('QA_PIXEL');
+//print(pixelqa_l7,'pixel_qal7');
+var pixelqa_l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                  .filterDate(time)
+                  .filterBounds(roi)
+                  .select('QA_PIXEL');
+//print(pixelqa_l8,'pixelqa_l8');
+var filter = ee.Filter.equals({
+  leftField: 'system:time_start',
+  rightField: 'system:time_start'
+});
+
+// Create the join.
+var simpleJoin = ee.Join.inner();
+
+// Inner join
+var innerJoinl7 = ee.ImageCollection(simpleJoin.apply(L7_boa, pixelqa_l7, filter))
+
+var joined_l7 = innerJoinl7.map(function(feature) {
+  return ee.Image.cat(feature.get('primary'), feature.get('secondary'));
+})
+
+var innerJoinl8 = ee.ImageCollection(simpleJoin.apply(L8_boa, pixelqa_l8, filter))
+
+var joined_l8 = innerJoinl8.map(function(feature) {
+  return ee.Image.cat(feature.get('primary'), feature.get('secondary'));
+})
+
+var l7_masked = joined_l7.map(cloudMaskL7)
+                      .map(BRDF.applyBRDF_l7);
+                      
+var l8_masked = joined_l8.map(maskL8sr)
+                  .map(BRDF.applyBRDF_l8);
+//print(l8_masked,'l8_masked');
+//print(L8_boa);
+
+
+// Reproject and rescale L8 image according to S2. Keep the system:time_start in metadata
+var resample_l8 = function(image) {
+  return image.resample('bilinear').reproject({
+  crs: collectionS2.first().select('B2').projection().crs(),
+  scale: 10
+}).set('system:time_start',image.get('system:time_start'));
+};
+
+
+var resample_sentinel2 = function(image) {
+  return sentinel2_image.resample('bilinear').reproject({
+  crs: planetscope_collection.first().select('B2').projection().crs(),
+  scale: 3
+}).set('system:time_start',image.get('system:time_start'));
+};
+
+var sentinel_resampled_reprojected = l8_masked.map(resample_l8);
+
+//NOW ITS THE ORIGINAL ONE, IF YOU WANT TO USE ALL 3 WITH SIAC, JUST CHANGE
+// THE VARIABLES BELOW TO: 
+// l8_masked,l7_masked = SIAC
+var l8_resampled = l8_masked.map(resample_l8);
+var l7_resampled = l7_masked.map(resample_l8);
+
+
+//var l8_resampled = l8_brdf.map(resample_l8);
+//var l7_resampled = l7.map(resample_l8);
+
+
+//print('L8 CRS:', resampled.first().select('B4').projection().crs());
+//print(l8_brdf);
+//print(s2_brdf);
+//print(l7_resampled);
+// Determine the displacement by matching only the 'Red' bands.
+var displacementL8 = ee.Image('LANDSAT/LC08/C02/T1_L2/LC08_170060_20180706').select('SR_B4').displacement({
+  referenceImage:  ee.Image('COPERNICUS/S2/20180706T074611_20180706T080020_T36MXE').select('B4'),
+  maxOffset: 50.0,//The maximum offset allowed when attempting to align the input images, in meters
+  patchWidth: 100.0 // Small enough to capture texture and large enough that ignorable 
+  //objects are small within the patch. Automatically ditermined if not provided 
+  //'COPERNICUS/S2/20181017T075921_20181017T080815_T36NWG' for top-right
+});
+
+// Function to allign Landsat 8 to Sentinel-2
+var alignl8 = function(image) {
+  return image.displace(displacementL8)
+};
+
+var l8_aligned = l8_resampled.map(alignl8);
+
+var displacementL7 = ee.Image('LANDSAT/LE07/C02/T1_L2/LE07_170060_20180527').select('SR_B3').displacement({
+  referenceImage:  ee.Image('COPERNICUS/S2/20180527T074731_20180527T075855_T36MXE').select('B4'),
+  maxOffset: 50.0,//The maximum offset allowed when attempting to align the input images, in meters
+  patchWidth: 100.0 // Small enough to capture texture and large enough that ignorable 
+  //objects are small within the patch. Automatically ditermined if not provided 
+  //COPERNICUS/S2/20181017T075921_20181017T080815_T36NWG top-right
+});
+
+// Function to allign Landsat 8 to Sentinel-2
+var alignl7 = function(image) {
+  return image.displace(displacementL7)
+};
+
+var l7_aligned = l7_resampled.map(alignl7);
+
+var L8_BRDF_re_ali = ee.ImageCollection(l8_aligned)
+                  .map(adj.adjustedS2A)
+                  .map(index.NDVI8);
+print(L8_BRDF_re_ali,'L8 dataset');
+
+var L7_BRDF_re_ali = ee.ImageCollection(l7_aligned)
+                  .map(adj.adjustedL7)
+                  .map(index.NDVI7);
+print(L7_BRDF_re_ali,'L7 dataset');
+
+
+var L9data = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')
+    .filterDate(time)
+    .filterBounds(roi);
+// Applies scaling factors.
+function applyScaleFactors(image) {
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  return image.addBands(opticalBands, null, true)
+              .addBands(thermalBands, null, true);
+}
+L9data = L9data.map(applyScaleFactors);
+var GetQABits = function(image, start, end, newName) {
+  var pattern = 0;
+  for (var i = start; i<=end; i++) {
+    pattern += Math.pow(2,i);
+  }
+  return image.select([0], [newName]).bitwiseAnd(pattern).rightShift(start);
+};
+var cloudPixels = function(image) {
+  var QA = image.select(['QA_PIXEL']);
+  return GetQABits(QA, 3, 4, 'cloud').eq(0);
+}
+var cloud_confidence = function(image) {
+  var QA = image.select(['QA_PIXEL'])
+  return GetQABits(QA, 10, 11, 'cloud_shadow').eq(1);
+}
+var maskL9clouds = function(image) {
+  var cp = cloudPixels(image);
+  var cc = cloud_confidence(image);
+  image = image.updateMask(cp);
+  return image.updateMask(cc);
+};
+var addNDVI = function(image) {
+  var ndvi = image.normalizedDifference(['SR_B5', 'SR_B4']).rename('NDVI');
+  return image.addBands(ndvi);
+};
+var L9masked = L9data.map(maskL9clouds).map(adj.adjustedL9).map(addNDVI);
+print(L9masked,'Landsat9');
+
+
+
+
+var both_finished = s2_brdf.merge(L9masked)//.merge(L7_BRDF_re_ali).merge(L8_BRDF_re_ali).merge(L9masked)//.merge(S1)
+                        .sort("system:time_start")
+                             .map(addDependents)
+                             .map(addHarmonics(harmonicFrequencies));
+print(both_finished,'Merged dataset');
+
+var harmonicTrendboth_finished = both_finished
+  .select(independents.add(dependent))
+  .reduce(ee.Reducer.linearRegression(independents.length(), 1));
+var harmonicTrendCoefficientsboth_finished = harmonicTrendboth_finished.select('coefficients')
+  .arrayProject([0])
+  .arrayFlatten([independents]);
+var fittedHarmonicboth_finished = both_finished.map(function(image) {
+  return image.addBands(
+    image.select(independents)
+      .multiply(harmonicTrendCoefficientsboth_finished)
+      .reduce('sum')
+      .rename('fitted'));
+});
+
+//print(fittedHarmonicboth_finished,'Check here');
+
+var unmaskedCol = both_finished.map(function(img){
+  // unmask each image in the collection
+  var unmasked = img.unmask(-99).eq(-99);
+  // reduce histogram on each image and set the keys as properties (key '1' will be masked pixels)
+  var rR = unmasked.reduceRegion({reducer: ee.Reducer.frequencyHistogram(),
+                               geometry: roi,
+                               scale: 100,
+                               bestEffort: true});
+  var newProperties = ee.Dictionary(rR.get('NDVI'));
+  return img.set(newProperties)
+});
+
+//collection of dem without masked pixels
+var colNotMasked = ee.ImageCollection(unmaskedCol).filter(ee.Filter.notNull(['1']).not())
+print(colNotMasked, 'notmasked');
+
+var test = colNotMasked.sort("system:time_start")
+                             .map(addDependents)
+                             .map(addHarmonics(harmonicFrequencies));
+var harmonicTrendboth_test = test
+  .select(independents.add(dependent))
+  .reduce(ee.Reducer.linearRegression(independents.length(), 1));
+var harmonicTrendCoefficientsboth_test = harmonicTrendboth_test.select('coefficients')
+  .arrayProject([0])
+  .arrayFlatten([independents]);
+var fittedHarmonicboth_test = test.map(function(image) {
+  return image.addBands(
+    image.select(independents)
+      .multiply(harmonicTrendCoefficientsboth_test)
+      .reduce('sum')
+      .rename('fitted'));
+});
+
+
+print(ui.Chart.image.series(fittedHarmonicboth_test.select(['fitted','NDVI']), roi, ee.Reducer.max(), 10)
+    .setOptions({
+      title: 'Harmonic model: using Level 1 S2, Level 2L8, Level 2L7 all SIAC, all adjusted for region',
+      lineWidth: 1,
+      pointSize: 3,
+      vAxis: {minValue:0,maxValue:1},
+}));
+
+//Extracting the SOS and EOS from the fitted curve
+//var NDVI_ratio = function(image) {
+//  var fit = fittedHarmonicboth_finished.select('fitted');
+//  var maxValue = fit.reduce(ee.Reducer.max());
+//  var minValue = fit.reduce(ee.Reducer.min());
+//  var NDVI_ratio = image.expression(float(fit-minValue)/(maxValue-minValue));
+//  return NDVI_ratio.float().copyProperties(image,['system:time_start']);
+//};
+var NDVI = fittedHarmonicboth_finished.select('NDVI');
+//var fit = fittedHarmonicboth_finished.select('fitted');
+//var maxValue = fit.reduce(ee.Reducer.max());
+//var minValue = fit.reduce(ee.Reducer.min());
+//var getNDVI_ratio = function(image) {
+  //var maxValue = image.reduce(ee.Reducer.max());
+ // var minValue = image.reduce(ee.Reducer.min());
+//  var top = image.subtract(minValue);
+//  var bottom = maxValue.subtract(minValue);
+//  var ratio = top.divide(bottom);
+//  return ratio.float().copyProperties(image,['system:time_start'])
+//};
+
+// Function for converting an ImageCollection into
+// one image with multiple bands
+// Credits to Marius 
+var mergeData = function(image,previous) {
+  return ee.Image(previous).addBands(image);
+};
+// Apply merge function
+//var export_merged = attempt.iterate(mergeBands, ee.Image([]));
+
+
+//var attempt = fit.map(getNDVI_ratio);
+//print(attempt);
+//print(ui.Chart.image.series(attempt, roi, ee.Reducer.mean(), 10)
+//    .setOptions({
+//      title: 'NDVI ratio',
+//      lineWidth: 1,
+//      pointSize: 3,
+      //vAxis: {minValue:0,maxValue:1},
+//}));
+
+//Export.image.toDrive({
+//  image: export_merged,
+//  description: 'NDVI ratio',
+//  fileNamePrefix: 'exampleExport',
+//  fileFormat: 'GeoTIFF',
+//  scale: 10,
+//  region: roi
+//});
+
+//print(ui.Chart.image.series(fittedHarmonicboth_finished.select(['fitted','NDVI']), roi1, ee.Reducer.mean(), 10)
+//    .setOptions({
+//      title: 'Harmonic model: using Level 1 S2, Level 2L8, Level 2L7 all SIAC, all adjusted for region',
+//      lineWidth: 1,
+//      pointSize: 3,
+//      vAxis: {minValue:0,maxValue:1},
+//}));
+
+//var L8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_TOA')
+//                  .filterDate('2018-12-01', '2021-01-01')
+//                  .filterBounds(roi)
+//                  .map(maskL8sr);
+
+//var L8_boa = L8.map(siac.get_l8_sur).map(addNDVI8);
+
+//var L8model = l8_brdf.map(addDependents)
+//                          .map(addHarmonics(harmonicFrequencies));
+
+// The output of the regression reduction is a 4x1 array image.
+//var harmonicTrend8 = L8model.select(independents.add(dependent))
+//  .reduce(ee.Reducer.linearRegression(independents.length(), 1));
+
+// Turn the array image into a multi-band image of coefficients.
+//var harmonicTrendCoefficients8 = harmonicTrend8.select('coefficients')
+//  .arrayProject([0])
+//  .arrayFlatten([independents]);
+
+// Compute fitted values.
+//var fittedHarmonic8 = L8model.map(function(image) {
+//  return image.addBands(
+//    image.select(independents)
+//      .multiply(harmonicTrendCoefficients8)
+//      .reduce('sum')
+//      .rename('fitted'));
+//});
+//print(fittedHarmonic8);
+// Plotting the same with Landsat8
+//print(ui.Chart.image.series(fittedHarmonic8.select(['fitted','NDVI']), roi, ee.Reducer.mean(), 10)
+//    .setOptions({
+//      title: 'Harmonic model: original and fitted values Landsat 8',
+//      lineWidth: 1,
+//      pointSize: 3,
+//      vAxis: {minValue:0},
+//}));
+
+///////////////////////////////////////////
+///// Exporting the time-series ///////////
+///////////////////////////////////////////
+
+
+var collection_export = fittedHarmonicboth_test.select(['NDVI'])
+  .filter(ee.Filter.bounds(roi))
+var timeSeries = ee.FeatureCollection(collection_export.map(function(image) {
+  var stats = image.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: roi,
+    scale: 10,
+    maxPixels: 1e10,
+  })
+  // reduceRegion doesn't return any output if the image doesn't intersect
+  // with the point or if the image is masked out due to cloud
+  // If there was no ndvi value found, we set the ndvi to a NoData value -9999
+  var ndvi = ee.List([stats.get('NDVI'), -9999])
+    .reduce(ee.Reducer.firstNonNull())
+  //var fitted = ee.List([stats.get('fitted'), -9999])
+  //  .reduce(ee.Reducer.firstNonNull())
+  // Create a feature with null geometry and NDVI value and date as properties
+  var f = ee.Feature(null, {'NDVI': ndvi, //'fitted':fitted,
+    'date': ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')});
+  return f;
+}));
+
+// Check the results
+//print(timeSeries.first())
+
+
+// Export to CSV
+Export.table.toDrive({
+    collection: timeSeries,
+    folder: 'Kenya_harmonization',
+    fileFormat: 'CSV'
+})
