@@ -1,0 +1,174 @@
+
+
+exports.NDVIS2 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B8', 'B4'])
+    .rename('NDVI'))
+    .float()
+    .copyProperties(image, ['system:time_start']);
+};
+
+exports.GNDVIS2 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B8A', 'B3'])
+    .rename('GNDVI'))
+    .float()
+    .copyProperties(image, ['system:time_start']);
+};
+
+exports.WDRVIS2 = function(image) {
+  var WDRVI = image.expression(
+      'float((alpha * nir) - red)/ ((alpha * nir) + red)', {
+        'nir': image.select('B8A'),
+        'red': image.select('B4'),
+        'alpha': 0.2})
+  return image.addBands((WDRVI).rename('WDRVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+
+// L can also be tested = 0.428
+exports.SAVIS2 = function(image) {
+  var SAVI = image.expression(
+      '(1 + L) * float(nir - red)/ (nir + red + L)', {
+        'nir': image.select('B8'),
+        'red': image.select('B4'),
+        'L': 0.428})
+  return image.addBands((SAVI).rename('SAVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+
+exports.EVIS2 = function(image) {
+  var EVI = image.expression(
+    '2.5 * (float(nir - red)/(nir + (6 * red) - (7.5 * blue) + 1))', {
+      'nir': image.select('B8'),
+      'red': image.select('B4'),
+      'blue': image.select('B2')})
+  return image.addBands((EVI).rename('EVI'))
+      .float().copyProperties(image,['system:time_start']);
+};
+exports.NDRES2 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B8A', 'B5'])
+    .rename('NDRE'))
+    .float()
+    .copyProperties(image, ['system:time_start']);
+};
+
+
+// Function to add an NDVI and SAVI bands, the dependent variable.
+exports.NDVI8 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B5', 'B4'])
+    .rename('NDVI'))
+    .float();
+};
+exports.NDVI7 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B4', 'B3'])
+    .rename('NDVI'))
+    .float();
+};
+exports.SAVI8 = function(image) {
+  var SAVI = image.expression(
+      '(1 + L) * float(nir - red)/ (nir + red + L)', {
+        'nir': image.select('B5'),
+        'red': image.select('B4'),
+        'L': 0.5})
+  return image.addBands((SAVI).rename('SAVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+exports.SAVI7 = function(image) {
+  var SAVI = image.expression(
+      '(1 + L) * float(nir - red)/ (nir + red + L)', {
+        'nir': image.select('B4'),
+        'red': image.select('B3'),
+        'L': 0.5})
+  return image.addBands((SAVI).rename('SAVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+exports.EVI8 = function(image) {
+  var EVI = image.expression(
+    '2.5 * (float(nir - red)/(nir + (6 * red) - (7.5 * blue) + 1))', {
+      'nir': image.select('B5'),
+      'red': image.select('B4'),
+      'blue': image.select('B2')})
+  return image.addBands((EVI).rename('EVI'))
+      .float().copyProperties(image,['system:time_start']);
+};
+exports.EVI7 = function(image) {
+  var EVI = image.expression(
+    '2.5 * (float(nir - red)/(nir + (6 * red) - (7.5 * blue) + 1))', {
+      'nir': image.select('B4'),
+      'red': image.select('B3'),
+      'blue': image.select('B1')})
+  return image.addBands((EVI).rename('EVI'))
+      .float().copyProperties(image,['system:time_start']);
+};
+exports.GNDVI8 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B5', 'B3'])
+    .rename('GNDVI'))
+    .float();
+};
+exports.GNDVI7 = function(image) {
+  return image
+    .addBands(image.normalizedDifference(['B4', 'B2'])
+    .rename('GNDVI'))
+    .float();
+};
+exports.WDRVI8 = function(image) {
+var WDRVI = image.expression(
+      'float((alpha * nir) - red)/ ((alpha * nir) + red)', {
+        'nir': image.select('B5'),
+        'red': image.select('B4'),
+        'alpha': 0.2})
+  return image.addBands((WDRVI).rename('WDRVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+exports.WDRVI7 = function(image) {
+  var WDRVI = image.expression(
+      'float((alpha * nir) - red)/ ((alpha * nir) + red)', {
+        'nir': image.select('B4'),
+        'red': image.select('B3'),
+        'alpha': 0.2})
+  return image.addBands((WDRVI).rename('WDRVI'))
+      .float().copyProperties(image, ['system:time_start']);
+};
+
+exports.RVI = function(image) {
+  var RVI =image.expression(
+    '(4*VH)/(VV+VH)', {
+      'VV': image.select('VV'),
+      'VH': image.select('VH')});
+  return image.addBands((RVI).rename('RVI'))
+              .float().copyProperties(image, ['system:time_start']);
+};
+
+// The bottom one is for when the data is in dB
+exports.RVI2 = function (image){
+  var value = image.expression(
+    'sqrt((nom)/(din))*(((nom)/(din)))', {
+    'nom': image.select('VV'),
+    'din': image.select('VV').add(image.select('VH'))});
+  return image.addBands((value).rename('RVI'))
+              .float().copyProperties(image, ['system:time_start'])};
+
+exports.NRPB = function(image) {
+  var NRPB =image.expression(
+    '((VH - VV) / (VH + VV))', {
+      'VV': image.select('VV'),
+      'VH': image.select('VH')});
+  return image.addBands((NRPB).rename('NRPB'))
+              .float().copyProperties(image, ['system:time_start']);
+};
+exports.NDVIS1 = function(image) {
+  /*var NDVI =image.expression(
+    '(0.3145 + (0.006185*VV) + (0.01931*VH) + (0.01295*angle) - (0.001144*NRPB))',{
+      'VV': image.select('VV'),
+      'VH': image.select('VH'),
+      'angle': image.select('angle'),
+      'NRPB': image.select('NRPB')})*/
+  var NDVI = image.select('NRPB');
+  return image.addBands((NDVI).rename('NDVI'))
+              .float().copyProperties(image, ['system:time_start']);
+};
